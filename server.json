@@ -1,0 +1,44 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.jkresearch8/domscout",
+  "title": "domscout",
+  "description": "domscout browser API as MCP tools: screenshots, Markdown extraction, structured data, DOM snapshots, page automation, and crawls.",
+  "version": "1.0.3",
+  "websiteUrl": "https://www.domscout.io/docs/mcp",
+  "repository": {
+    "url": "https://github.com/jkresearch8/domscout-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@domscout/mcp",
+      "version": "1.0.3",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "DOMSCOUT_API_KEY",
+          "description": "A domscout API key from https://www.domscout.io/dashboard/api-keys. Every tool call is billed to the account that owns it.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "DOMSCOUT_BASE_URL",
+          "description": "Override the API host. Only needed against a non-production deployment; omit it in normal use.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "DOMSCOUT_DOCS_BASE_URL",
+          "description": "Override the host the documentation resources are read from. It cannot be derived from DOMSCOUT_BASE_URL, because the API host serves no llms-full.txt.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

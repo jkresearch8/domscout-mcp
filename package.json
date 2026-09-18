@@ -1,0 +1,48 @@
+{
+  "name": "@domscout/mcp",
+  "version": "1.0.3",
+  "mcpName": "io.github.jkresearch8/domscout",
+  "description": "domscout browser API as MCP tools: screenshots, Markdown extraction, structured data, DOM snapshots, page automation, and crawls.",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "domscout-mcp": "src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jkresearch8/domscout-mcp.git"
+  },
+  "homepage": "https://www.domscout.io/docs/mcp",
+  "bugs": {
+    "url": "https://github.com/jkresearch8/domscout-mcp/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node --check src/index.js && node --check src/tools.js && node --check src/client.js && node --check src/validate.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "screenshot",
+    "browser",
+    "scraping",
+    "markdown",
+    "agent"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  }
+}
