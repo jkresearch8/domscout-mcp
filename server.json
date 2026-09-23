@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.jkresearch8/domscout",
   "title": "domscout",
-  "description": "domscout browser API as MCP tools: screenshots, Markdown extraction, structured data, DOM snapshots, page automation, and crawls.",
-  "version": "1.0.3",
+  "description": "domscout browser API as MCP tools: screenshots, Markdown, structured data, page automation, crawls.",
+  "version": "1.0.6",
   "websiteUrl": "https://www.domscout.io/docs/mcp",
   "repository": {
     "url": "https://github.com/jkresearch8/domscout-mcp",
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@domscout/mcp",
-      "version": "1.0.3",
+      "version": "1.0.6",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -23,7 +23,7 @@
         {
           "name": "DOMSCOUT_API_KEY",
           "description": "A domscout API key from https://www.domscout.io/dashboard/api-keys. Every tool call is billed to the account that owns it.",
-          "isRequired": true,
+          "isRequired": false,
           "isSecret": true
         },
         {

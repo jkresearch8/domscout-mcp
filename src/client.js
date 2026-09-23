@@ -50,9 +50,21 @@ export class DomscoutError extends Error {
  * is never invoked, so no `x-domscout-*` header exists, and the one case where
  * waiting a second is exactly the right move was the one case we told the model
  * not to bother. Missing evidence now means retriable, not broke.
+ *
+ * ── THE BODY'S CODE COMES FIRST ─────────────────────────────────────────────
+ *
+ * When the API names the wall, that answer wins over the headers. An account
+ * billed as overage past its quota reports zero credits and zero quota while it
+ * can still pay, so its per-second rate limit looks exactly like an empty
+ * balance. The headers decide only for a refusal that carries no code.
  */
-function classify(status, headers) {
+const RETRIABLE_429_CODES = new Set(['RATE_LIMIT_EXCEEDED']);
+const TERMINAL_429_CODES = new Set(['QUOTA_EXCEEDED', 'OVERAGE_CEILING_REACHED', 'FEEDBACK_LIMIT_REACHED']);
+
+function classify(status, headers, code = null) {
   if (status === 429) {
+    if (RETRIABLE_429_CODES.has(code)) return true;
+    if (TERMINAL_429_CODES.has(code)) return false;
     const credits = headerNumber(headers, 'x-domscout-credits-remaining');
     const quota = headerNumber(headers, 'x-domscout-quota-remaining');
     if (credits === null || quota === null) return true;
@@ -193,7 +205,7 @@ export function createClient({
         code: payload?.code || null,
         requestId: payload?.requestId || usage.requestId,
         suggestions: Array.isArray(payload?.suggestions) ? payload.suggestions : [],
-        retriable: classify(response.status, response.headers),
+        retriable: classify(response.status, response.headers, payload?.code || null),
       });
     }
 

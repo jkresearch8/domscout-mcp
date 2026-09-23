@@ -638,7 +638,13 @@ export function toErrorContent(error) {
   } else if (error.status === 403) {
     lines.push('Not retriable. This is an authentication, plan, or entitlement refusal — the same call will fail again.');
   } else if (error.status === 429 && !error.retriable) {
-    lines.push('Out of quota and credits. Retrying will not help; the account needs credits or a higher plan.');
+    if (error.code === 'OVERAGE_CEILING_REACHED') {
+      lines.push('The monthly overage ceiling is reached. Retrying will not help this month; the account needs credits or a raised ceiling.');
+    } else if (error.code === 'FEEDBACK_LIMIT_REACHED') {
+      lines.push('The feedback limit for today is reached. Retrying will not help until it resets.');
+    } else {
+      lines.push('Out of quota and credits. Retrying will not help; the account needs credits or a higher plan.');
+    }
   } else if (error.retriable) {
     lines.push('Retriable. Wait a moment and try once more.');
   } else {

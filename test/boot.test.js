@@ -455,22 +455,58 @@ test('an empty document still returns a usable answer rather than an empty block
   });
 });
 
-test('booting without an API key fails loudly on stderr and leaves stdout clean', async () => {
-  // stdout IS the JSON-RPC channel. A single stray byte on it corrupts the
-  // session for the client, so a startup failure must never write there.
+test('booting without an API key still serves tools/list, and fails on the call', async () => {
+  // A directory, and any client previewing the server before a key is pasted,
+  // reads tools/list from a process that has no credential. Exiting here made
+  // that impossible and published a server that appeared to offer nothing.
   const env = { ...process.env };
   delete env.DOMSCOUT_API_KEY;
 
-  const child = spawn(process.execPath, [ENTRY], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [ENTRY], { env, stdio: ['pipe', 'pipe', 'pipe'] });
   let stdout = '';
   let stderr = '';
   child.stdout.on('data', (chunk) => { stdout += chunk; });
   child.stderr.on('data', (chunk) => { stderr += chunk; });
 
-  const code = await new Promise((resolve) => child.on('exit', resolve));
+  const send = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
+  send({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1.0.0' } },
+  });
+  send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+  send({
+    jsonrpc: '2.0',
+    id: 3,
+    method: 'tools/call',
+    params: { name: 'domscout_check_credits', arguments: {} },
+  });
 
-  assert.equal(code, 1, 'a server with no key must exit non-zero rather than idle');
-  assert.equal(stdout, '', 'nothing may ever be written to the JSON-RPC channel');
+  const replies = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timed out; stdout so far: ${stdout}`)), 15_000);
+    child.stdout.on('data', () => {
+      const parsed = stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      if (parsed.some((m) => m.id === 3)) {
+        clearTimeout(timer);
+        resolve(parsed);
+      }
+    });
+  });
+  child.kill();
+
+  const listed = replies.find((m) => m.id === 2);
+  assert.ok(listed.result.tools.length > 0, 'tools must be enumerable without a credential');
+
+  const called = replies.find((m) => m.id === 3);
+  assert.ok(called.result.isError, 'calling a tool without a key must be an error result');
+  const text = called.result.content.map((c) => c.text).join(' ');
+  assert.match(text, /DOMSCOUT_API_KEY is not set/);
+  assert.match(text, /dashboard\/api-keys/, 'the message must say where to get a key');
+
+  // stdout IS the JSON-RPC channel, so the diagnostic belongs on stderr and
+  // every stdout line must parse as a message.
   assert.match(stderr, /DOMSCOUT_API_KEY is not set/);
-  assert.match(stderr, /dashboard\/api-keys/, 'the message must say where to get a key');
+  for (const line of stdout.split('\n').filter(Boolean)) JSON.parse(line);
 });

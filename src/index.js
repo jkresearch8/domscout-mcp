@@ -84,14 +84,28 @@ const RESOURCES = [
 ];
 
 function main() {
-  let client;
+  /*
+    A CONFIGURATION FAILURE IS DEFERRED TO THE FIRST TOOL CALL, NOT FATAL HERE.
+    Exiting made the server unable to complete `initialize`, so nothing could
+    reach tools/list: a directory listing the server enumerated no tools, and a
+    client previewing what it offers before a key is pasted saw a process that
+    died. None of that needs a credential — only CALLING a tool does.
+
+    The error is kept and thrown from the call handler, which already turns it
+    into an `isError` result, so the reason reaches the person in their client
+    instead of a stderr line most of them never see. The trade is that a
+    malformed DOMSCOUT_BASE_URL now surfaces on first use rather than at
+    startup; it is the same message, somewhere it is read.
+  */
+  let client = null;
+  let clientError = null;
   try {
     client = createClient();
   } catch (error) {
-    // Written to stderr, not stdout: stdout is the JSON-RPC channel and any
-    // stray byte on it corrupts the session for the client.
+    clientError = error;
+    // stderr, never stdout: stdout is the JSON-RPC channel and any stray byte
+    // on it corrupts the session for the client.
     process.stderr.write(`${error.message}\n`);
-    process.exit(1);
   }
 
   const server = new Server(
@@ -144,6 +158,8 @@ function main() {
       // Inside the try: an argument the model got wrong is a result it should
       // see and can act on, exactly like an upstream 400, not a transport fault.
       assertValidToolArguments(tool.name, tool.inputSchema, request.params.arguments || {});
+      // The startup failure, surfaced where it can be read and acted on.
+      if (clientError) throw clientError;
       const result = await tool.run(client, request.params.arguments || {});
       return { content: toContent(result) };
     } catch (error) {

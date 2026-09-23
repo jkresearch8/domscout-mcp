@@ -1,15 +1,22 @@
 # @domscout/mcp
 
-> Last reviewed: September 18, 2026.
-
 Use domscout as MCP tools to read pages as Markdown, capture screenshots,
 extract structured data, inspect interactive structure, automate browser flows,
 and crawl allowlisted sites.
 
-## Setup
+## Install
 
-1. Create an API key in <https://www.domscout.io/dashboard/api-keys>.
-2. Configure your MCP client:
+Create an API key at <https://www.domscout.io/dashboard/api-keys>, then add the
+server to your client. Node.js 20 or newer is the only requirement; `npx`
+fetches and runs it, so there is nothing to install or build.
+
+**Claude Code**
+
+```bash
+claude mcp add --transport stdio --env DOMSCOUT_API_KEY=YOUR_API_KEY domscout -- npx -y @domscout/mcp
+```
+
+**Claude Desktop, Cursor, VS Code, and any other MCP client**
 
 ```json
 {
@@ -18,18 +25,23 @@ and crawl allowlisted sites.
       "command": "npx",
       "args": ["-y", "@domscout/mcp"],
       "env": {
-        "DOMSCOUT_API_KEY": "ds_your_key_here"
+        "DOMSCOUT_API_KEY": "YOUR_API_KEY"
       }
     }
   }
 }
 ```
 
+One-click install buttons for Cursor and VS Code are on the
+[documentation page](https://www.domscout.io/docs/mcp).
+
+### Environment
+
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `DOMSCOUT_API_KEY` | Yes | Your API key. |
+| `DOMSCOUT_API_KEY` | For tool calls | Your API key. The server starts and lists its tools without one; every tool call needs it. |
 | `DOMSCOUT_BASE_URL` | No | Overrides the current production gateway for an intentionally separate deployment. |
-| `DOMSCOUT_DOCS_BASE_URL` | No | Where the contract resources (`/llms-full.txt`, `/openapi.json`) are fetched from. Separate from `DOMSCOUT_BASE_URL` because the docs are served by the marketing site, not the API gateway — that host has no `/llms-full.txt`. Defaults to `https://www.domscout.io`. |
+| `DOMSCOUT_DOCS_BASE_URL` | No | Where the contract resources (`/llms-full.txt`, `/openapi.json`) are fetched from. Separate from `DOMSCOUT_BASE_URL` because the docs are served by the marketing site, not the API gateway, and that host has no `/llms-full.txt`. Defaults to `https://www.domscout.io`. |
 
 The default targets `https://api.domscout.io`. API requests do not follow
 redirects, so the key is never re-sent to another URL: a `DOMSCOUT_BASE_URL`
@@ -69,11 +81,6 @@ The MCP server sends an `x-api-key` to the configured API host and reads the
 response. It has no browser, database, or billing credential. Keep the key in
 the MCP client environment block; do not commit it or paste it into prompts.
 
-
-## Requirements
-
-Node.js 20 or newer. `npx -y @domscout/mcp` downloads and runs it; there is
-nothing to install or build.
 
 ## Links
 
