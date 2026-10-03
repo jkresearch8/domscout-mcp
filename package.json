@@ -1,6 +1,6 @@
 {
   "name": "@domscout/mcp",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "mcpName": "io.github.jkresearch8/domscout",
   "description": "domscout browser API as MCP tools: screenshots, Markdown, structured data, page automation, crawls.",
   "type": "module",

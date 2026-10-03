@@ -1,16 +1,4 @@
-/**
- * A thin HTTP client for the domscout API.
- *
- * ── WHAT THIS DELIBERATELY IS NOT ───────────────────────────────────────────
- *
- * It has no browser, no database credential, and no payment credential. It
- * sends `x-api-key` to one host and reads JSON back. The MCP server runs on a
- * user's machine, inside whatever agent platform they chose, so the blast
- * radius of it being compromised must be exactly "someone can spend that user's
- * captures" — nothing more.
- *
- * Kept free of the MCP SDK so it can be tested without a transport.
- */
+/** HTTP client for the domscout API, independent of the MCP transport. */
 
 export const DEFAULT_BASE_URL = 'https://api.domscout.io';
 
@@ -29,35 +17,8 @@ export class DomscoutError extends Error {
   }
 }
 
-/**
- * Which failures are worth trying again.
- *
- * A 403 is never retriable here: it is a bad key, a plan gate, or the
- * browser-isolation hold, and none of those change between two calls a second
- * apart. Telling a model otherwise is how it spends its whole budget on a wall.
- *
- * A 429 is retriable ONLY when the budget headers say the refusal was the rate
- * limit rather than an exhausted balance. That distinction is the difference
- * between "wait one second" and "you cannot afford this at all", and it is the
- * single most useful thing this client does for the caller.
- *
- * ── ABSENT IS NOT ZERO ──────────────────────────────────────────────────────
- *
- * `headers.get()` returns null for a header that was never sent, and
- * `Number(null)` is 0, not NaN. Read naively, a 429 carrying NEITHER budget
- * header therefore looked like a balance of exactly zero and was reported as
- * terminal. That is precisely the shape of an API Gateway throttle: the Lambda
- * is never invoked, so no `x-domscout-*` header exists, and the one case where
- * waiting a second is exactly the right move was the one case we told the model
- * not to bother. Missing evidence now means retriable, not broke.
- *
- * ── THE BODY'S CODE COMES FIRST ─────────────────────────────────────────────
- *
- * When the API names the wall, that answer wins over the headers. An account
- * billed as overage past its quota reports zero credits and zero quota while it
- * can still pay, so its per-second rate limit looks exactly like an empty
- * balance. The headers decide only for a refusal that carries no code.
- */
+// Explicit refusal codes take precedence over budget headers. Missing headers
+// cannot establish an exhausted balance: gateway throttles omit them entirely.
 const RETRIABLE_429_CODES = new Set(['RATE_LIMIT_EXCEEDED']);
 const TERMINAL_429_CODES = new Set(['QUOTA_EXCEEDED', 'OVERAGE_CEILING_REACHED', 'FEEDBACK_LIMIT_REACHED']);
 
@@ -73,22 +34,8 @@ function classify(status, headers, code = null) {
   return status >= 500 && status !== 501;
 }
 
-/**
- * Refuse a target URL the tools already promise to refuse.
- *
- * URL_PROP tells the model the page "must be http(s)" and that credentials in
- * the URL are rejected — and then nothing checked either. The schema carries
- * `type: string` and prose, and validate.js deliberately has no `pattern`
- * keyword (its own header explains why a promised-but-unenforced keyword is
- * worse than none). So `url: "example.com"` and `url: ""` were packed into a
- * request and sent, to be refused by the API as URL_INVALID after a round trip
- * and a rate-limit slot.
- *
- * ONLY the three things that can be decided here, deliberately. Whether a host
- * is publicly reachable — loopback, private ranges, metadata addresses, DNS
- * rebinding — is settled by guardedLookup at capture time against the address
- * actually dialled. Re-implementing any of that here would be a second, weaker
- * policy that drifts from the one that matters.
+/** Reject malformed, non-HTTP and credential-bearing target URLs locally.
+ * Public reachability is checked by the API against the address it actually dials.
  */
 export function assertTargetUrlIsDialable(url) {
   let parsed;
@@ -164,20 +111,7 @@ export function createClient({
       );
     }
 
-    // THE BODY IS AS MUCH THE TRANSPORT AS THE HEADERS ARE.
-    //
-    // This read sat outside the try above, so only time-to-headers was
-    // classified. A peer can answer with a status line and then reset the
-    // connection or trickle the body forever, and `AbortSignal.timeout` covers
-    // body reading too — so a truncated or aborted body threw a bare
-    // TypeError/DOMException rather than a DomscoutError.
-    //
-    // That is not a cosmetic difference. `toErrorContent` branches on
-    // `instanceof DomscoutError` and falls to a generic "domscout tool failed"
-    // line for anything else, with no retriability verdict attached. So the one
-    // failure class that is almost always worth retrying was the one the model
-    // was told nothing about — defeating the distinction this file exists to
-    // draw.
+    // Body reads can time out or reset after headers arrive; preserve the retry verdict.
     let text;
     try {
       text = await response.text();
@@ -232,22 +166,7 @@ export function createClient({
   };
 }
 
-/**
- * `DOMSCOUT_API_KEY` travels in a header on every request, so the scheme is not
- * cosmetic.
- *
- * Nothing checked it. The default is HTTPS, but `DOMSCOUT_BASE_URL` exists to
- * point this client somewhere else, and `http://` there put a live customer
- * credential on the wire in clear text on every tool call — recoverable by
- * anything between the operator's machine and that host, and with no symptom to
- * notice, because the requests all succeed.
- *
- * Loopback is exempt: `http://127.0.0.1:3000` is how the API is developed
- * against locally, and the key never leaves the machine. Everything else is
- * REFUSED rather than warned. A warning on stderr is the right weight for the
- * stage-suffix mistake below, which costs a confusing 403; it is the wrong
- * weight for handing out a credential, which cannot be taken back once sent.
- */
+// Outside loopback, API keys must travel over HTTPS.
 function assertKeyStaysEncrypted(root) {
   let url;
   try {
@@ -266,27 +185,8 @@ function assertKeyStaysEncrypted(root) {
   );
 }
 
-/**
- * A stage segment on a custom domain is always wrong, and fails late.
- *
- * The raw gateway host carries the stage in the path
- * (`…execute-api.us-east-1.amazonaws.com/prod`). `api.domscout.io` does not: it
- * is a base-path mapping ONTO the prod stage, so the segment is already spent
- * and `https://api.domscout.io/prod/screenshot` asks for a base path named
- * `prod` that is mapped to nothing. API Gateway answers 403 before the Lambda
- * is reached, which reads exactly like a bad API key and sends the operator
- * looking at the wrong thing.
- *
- * The obvious repair — strip the segment — is deliberately not taken.
- * `DOMSCOUT_BASE_URL` exists for an intentionally separate deployment, and
- * someone who really has mapped a base path called `prod` would find their URL
- * silently rewritten with no way to opt out. Saying so on stderr costs them
- * nothing and tells the operator who copied the old URL out of a stale document
- * precisely what to remove.
- *
- * stderr, not stdout: stdout IS the JSON-RPC transport, and a stray line there
- * corrupts the frame the host is parsing.
- */
+// Custom-domain stage suffixes can produce a gateway 403 before authentication.
+// Warn without rewriting an intentionally configured deployment URL.
 function warnIfStageSuffix(root) {
   let url;
   try { url = new URL(root); } catch { return; }

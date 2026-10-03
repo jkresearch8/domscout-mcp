@@ -1,27 +1,4 @@
-/**
- * The tools domscout exposes to an agent.
- *
- * ── WHY TEN TOOLS AND NOT EIGHTY ────────────────────────────────────────────
- *
- * The domscout REST contract carries 80+ schemas, and `POST /screenshot` alone
- * accepts ~40 top-level fields. Exposing that surface one-to-one would put tens of
- * thousands of tokens of schema into the model's context before it has done
- * anything, and every one of those parameters is a way to get the call wrong.
- *
- * These are shaped by TASK instead: "get me the readable text of this page" is
- * a thing an agent wants; "POST /screenshot with extractMarkdown: true,
- * responseType: json, and format omitted" is how you do it. The mapping is this
- * file's job, not the model's.
- *
- * ── WHY EVERY DESCRIPTION STATES A PRICE ────────────────────────────────────
- *
- * Requests are weighted, and a model that cannot see the cost of a tool will
- * either avoid the useful ones or exhaust a balance on them. The cost is the
- * first thing in each description for the same reason it is the first thing on
- * a menu.
- *
- * SDK-free on purpose so it can be tested without one.
- */
+/** Task-oriented tools with credit prices visible to MCP clients. */
 
 import { DomscoutError } from './client.js';
 
@@ -43,11 +20,7 @@ const MAX_INLINE_PDF_BASE64 = 256 * 1024;
 
 const URL_PROP = {
   type: 'string',
-  // NO TOOL HERE ACCEPTS `headers`, and this description used to tell the model
-  // to use it. A parameter named in a schema description is a parameter the
-  // model will try to send, and `additionalProperties: false` now refuses it —
-  // so the advice cost a call and produced an error naming a field that does not
-  // exist. Authenticated capture is a REST-API feature, not an MCP-tool one.
+  // Authenticated target-page requests require the REST API.
   description: 'The page to load. Must be http(s) and publicly reachable. Credentials in the URL (https://user:pass@host) are rejected; these tools capture as an anonymous visitor, so use the REST API directly if the page needs authentication.',
 };
 
@@ -128,15 +101,7 @@ export const TOOLS = [
       // costing a credit to learn that. Naming the conflict locally costs
       // nothing and tells the model exactly which half to drop.
       if (args.fast === true) {
-        // `delay: 0` is not a delay, so it is not a conflict.
-        //
-        // The filter kept any value that was neither undefined nor false, and
-        // 0 is neither. So `fast: true, delay: 0` — an explicit no-op, and the
-        // shape a model produces when it fills every property of the schema —
-        // was refused with a 400 claiming `delay` could not take effect. It was
-        // never going to take effect: it asks for no wait at all, which is
-        // exactly what fast:true already does. The refusal cost the caller a
-        // round trip to be told to drop an option that changed nothing.
+        // A zero delay is compatible with skipping the browser.
         const needsBrowser = ['waitForSelector', 'delay', 'lazyScroll']
           .filter((key) => args[key] !== undefined && args[key] !== false && args[key] !== 0);
         if (needsBrowser.length > 0) {
@@ -202,44 +167,7 @@ export const TOOLS = [
       });
       if (data?.status === 'accepted') return { json: asyncNotice(data), usage };
 
-      const base64 = data?.screenshotBase64 || data?.pdfBase64;
-      if (!base64) return { json: data, usage };
-      if (args.format === 'pdf') {
-        const kilobytes = Math.round((base64.length * 3) / 4 / 1024);
-        // BOUNDED, for the same reason stated below about images: a model handed
-        // base64 as "text" cannot read it and pays for the tokens anyway. That
-        // reasoning was applied to screenshots and not to PDFs, which are the
-        // LARGER of the two — a full-page PDF runs to megabytes, and base64 adds
-        // a third again on top. Inlining one could exhaust a context window on a
-        // single call, and bill the caller for the privilege.
-        //
-        // Small documents still come through whole, because some clients do
-        // decode and save a text block, and truncating those would remove a
-        // working capability for no gain.
-        if (base64.length > MAX_INLINE_PDF_BASE64) {
-          return {
-            text: `[PDF document captured (${kilobytes} KB), too large to inline. `
-              + 'The bytes are not readable as text by a model in any case; retrieve this '
-              + 'capture through the REST API with responseType binary, or narrow the page '
-              + 'with a selector.]',
-            json: { metadata: data?.metadata },
-            usage,
-          };
-        }
-        return {
-          text: `[PDF document captured (${kilobytes} KB). Base64 data below]\n${base64}`,
-          json: { metadata: data?.metadata },
-          usage,
-        };
-      }
-      // Returned as an image content block, not base64 in a text field. A model
-      // handed 400KB of base64 as "text" cannot see the picture and pays for
-      // the tokens anyway.
-      return {
-        image: { data: base64, mimeType: `image/${args.format || 'png'}` },
-        json: { metadata: data?.metadata },
-        usage,
-      };
+      return captureContent(data, usage, args.format);
     },
   },
 
@@ -453,6 +381,10 @@ export const TOOLS = [
     async run(client, args) {
       const fn = args.kind === 'crawl' ? client.crawlStatus : args.kind === 'batch' ? client.batchStatus : client.job;
       const { data, usage } = await fn(args.jobId);
+      if (data?.status === 'done' && data.result) {
+        const rendered = captureContent(data.result, usage);
+        return { ...rendered, json: { ...data, result: rendered.json } };
+      }
       return { json: data, usage };
     },
   },
@@ -522,34 +454,11 @@ export const TOOLS = [
   },
 ];
 
-/**
- * Every prefix a live domscout key may carry.
- *
- * `ws_` is still live and must stay: keys issued under the previous product
- * name were never reissued. The list is duplicated from the service's own
- * declaration rather than imported, because this package is ESM and
- * deliberately dependency-free; a contract test compares the two, so a third
- * prefix cannot be added on one side and forgotten here.
- */
+/** Key prefixes supported by the API; a contract test keeps this list aligned. */
 const KEY_PREFIXES = ['ds', 'ws'];
 
-/**
- * Strip credentials out of text a human is going to read.
- *
- * `domscout_send_feedback` forwards `message`, `expected` and `actual`
- * verbatim to a queue the team reads by hand, and its own description ends
- * "Do not include API keys or other secrets" — an instruction aimed at a model,
- * with nothing behind it. The single most likely thing to be reported through
- * this tool is an authentication failure, and the most natural way for a model
- * to describe one is to quote the request it sent.
- *
- * Redacted HERE rather than server-side, because the goal is that the secret
- * never leaves the machine holding it. A scrubber at the other end has already
- * received it.
- *
- * Deliberately narrow: key-shaped literals, Bearer values, and the header names
- * this API authenticates with. Anything broader starts eating the URLs and
- * selectors that make a bug report worth reading.
+/** Remove key-shaped literals and authentication values before feedback leaves
+ * the client. Preserve URLs and selectors needed to understand the report.
  */
 const CREDENTIAL_PATTERNS = [
   new RegExp(String.raw`\b(?:${KEY_PREFIXES.join('|')})_[A-Za-z0-9_-]{20,}`, 'g'),
@@ -568,6 +477,51 @@ export function scrubCredentials(value) {
     }),
     value,
   );
+}
+
+function captureContent(data, usage, format) {
+  const base64 = data?.screenshotBase64 || data?.pdfBase64;
+  if (!data || typeof data !== 'object') return { json: data, usage };
+  const { screenshotBase64: _screenshot, pdfBase64: _pdf,
+    mobileBase64, tabletBase64, desktopBase64, skeletonBase64, hydratedBase64,
+    timelineBase64, ...json } = data;
+  const mimeType = `image/${format || data?.metadata?.format || 'png'}`;
+  const images = [mobileBase64, tabletBase64, desktopBase64, skeletonBase64, hydratedBase64,
+    ...(Array.isArray(timelineBase64) ? timelineBase64 : [])]
+    .filter(value => typeof value === 'string' && value.length > 0)
+    .map(value => ({ data: value, mimeType }));
+  if (!base64) return { json, usage, images };
+  if (data?.pdfBase64 || format === 'pdf') {
+    const kilobytes = Math.round((base64.length * 3) / 4 / 1024);
+    // Base64 PDFs are unreadable to a model; bound text payloads while retaining
+    // small documents for clients that save them as files.
+    if (base64.length > MAX_INLINE_PDF_BASE64) {
+      return {
+        text: `[PDF document captured (${kilobytes} KB), too large to inline. `
+          + 'The bytes are not readable as text by a model in any case; retrieve this '
+          + 'capture through the REST API with responseType binary, or narrow the page '
+          + 'with a selector.]',
+        json,
+        usage,
+        images,
+      };
+    }
+    return {
+      text: `[PDF document captured (${kilobytes} KB). Base64 data below]\n${base64}`,
+      json,
+      usage,
+      images,
+    };
+  }
+  // Returned as an image content block, not base64 in a text field. A model
+  // handed 400KB of base64 as "text" cannot see the picture and pays for
+  // the tokens anyway.
+  return {
+    image: { data: base64, mimeType },
+    json,
+    usage,
+    images,
+  };
 }
 
 function pick(source, keys) {
@@ -601,6 +555,7 @@ export function toContent(result) {
   const blocks = [];
   if (result.text) blocks.push({ type: 'text', text: result.text });
   if (result.image) blocks.push({ type: 'image', data: result.image.data, mimeType: result.image.mimeType });
+  for (const item of result.images || []) blocks.push({ type: 'image', data: item.data, mimeType: item.mimeType });
   if (result.json !== undefined && result.json !== null) {
     blocks.push({ type: 'text', text: JSON.stringify(result.json, null, 2) });
   }

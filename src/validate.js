@@ -1,38 +1,5 @@
-/**
- * Runtime validation of tool arguments against the tool's own declared schema.
- *
- * ── WHY THIS FILE EXISTS ────────────────────────────────────────────────────
- *
- * Every tool in tools.js declares an `inputSchema`, and until this file was
- * written NOTHING EVER CHECKED ARGUMENTS AGAINST IT. `CallToolRequestSchema`
- * validates the JSON-RPC envelope — that `params.name` is a string and
- * `params.arguments` is an object — and then hands `arguments` straight to
- * `tool.run`. The schemas were documentation the model read and nothing
- * enforced.
- *
- * That is worse than having no schema. A model that emits `delay: -5000`,
- * `width: 99999`, `devicePreset: "iphone99"` or `maxPages: "twenty"` gets a
- * network round trip, a 400 from the API, and — for anything the API accepts
- * but did not mean — a capture it paid a credit for. The constraints were
- * already written down; they simply were not applied on the near side of the
- * wire, which is the only side that can refuse for free.
- *
- * ── WHY NOT ajv ─────────────────────────────────────────────────────────────
- *
- * ajv is present in node_modules as a transitive dependency of the MCP SDK, not
- * as one of ours. This package declares exactly one dependency, and tools.js is
- * deliberately "SDK-free ... so it can be tested without one"; taking a direct
- * dependency on a code-generating validator to check ten hand-written schemas
- * would be a poor trade for a package this small.
- *
- * ── WHY AN UNKNOWN KEYWORD IS AN ERROR ──────────────────────────────────────
- *
- * `assertKnownKeywords` refuses a schema containing a keyword this file does
- * not implement. The alternative — ignore what we do not understand — recreates
- * the exact failure this file exists to fix, silently and one keyword at a
- * time: someone adds `pattern` to a schema, the tool description promises it,
- * and nothing enforces it. Failing here is loud, happens on the developer's
- * machine, and is fixed by implementing the keyword.
+/** Validate arguments before an API request can be billed.
+ * The MCP SDK validates the request envelope; tool constraints need their own check.
  */
 
 /** Keywords that constrain a value, and are enforced below. */
@@ -69,13 +36,7 @@ function typeMatches(value, type) {
   return true;
 }
 
-/**
- * Walk a schema at load time and refuse anything unimplemented.
- *
- * Called once per tool from index.js rather than per request: a schema is a
- * constant, so this is a startup assertion about OUR code, not a check on the
- * caller's input.
- */
+/** Reject unsupported schema keywords before the server advertises a tool. */
 export function assertKnownKeywords(schema, path = 'inputSchema') {
   if (!schema || typeof schema !== 'object') return;
   for (const keyword of Object.keys(schema)) {
@@ -154,17 +115,7 @@ function validate(value, schema, path) {
     }
     for (const key of keys) {
       if (value[key] === undefined) continue;
-      // `Object.hasOwn`, NOT `schema.properties?.[key]`.
-      //
-      // A plain object inherits from Object.prototype, so `properties.toString`
-      // resolved to the INHERITED function for any argument named `toString`,
-      // `constructor`, `valueOf`, `hasOwnProperty` … `child` was then truthy,
-      // this branch was taken, and `validate` returned immediately at its
-      // `typeof schema !== 'object'` guard because a function is not an object.
-      // The `continue` below meant the key never reached the
-      // `additionalProperties: false` check — so `{"toString": …}` was accepted
-      // by a schema that accepts nothing but its declared properties, and was
-      // forwarded to the API unvalidated.
+      // Inherited Object.prototype members are not declared schema properties.
       const child = Object.hasOwn(schema.properties || {}, key) ? schema.properties[key] : undefined;
       if (child) {
         validate(value[key], child, `${path}.${key}`);

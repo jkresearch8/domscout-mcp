@@ -1,26 +1,5 @@
 #!/usr/bin/env node
-/**
- * domscout as an MCP server, over stdio.
- *
- * ── WHY STDIO AND NOT A HOSTED ENDPOINT ─────────────────────────────────────
- *
- * A hosted MCP endpoint needs OAuth, session handling, and a new always-on
- * service to secure and monitor. stdio needs a config block and an environment
- * variable, works today in every MCP client, and adds no attack surface we have
- * to operate — the process runs on the user's machine and holds only their own
- * API key. The tool layer here is transport-agnostic, so a remote variant later
- * is a second entry point rather than a rewrite.
- *
- *   {
- *     "mcpServers": {
- *       "domscout": {
- *         "command": "npx",
- *         "args": ["-y", "@domscout/mcp"],
- *         "env": { "DOMSCOUT_API_KEY": "ds_..." }
- *       }
- *     }
- *   }
- */
+/** Local MCP server over stdio; configuration comes from the client environment. */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -38,27 +17,13 @@ import { createClient, DEFAULT_BASE_URL } from './client.js';
 import { TOOLS, toContent, toErrorContent } from './tools.js';
 import { assertKnownKeywords, assertValidToolArguments } from './validate.js';
 
-// At load, not per call: every declared schema must be one the validator can
-// actually enforce. A schema keyword nothing implements is a promise made to
-// the model in the tool listing and kept by nobody, which is the failure
-// validate.js exists to end — so it is a startup crash rather than a silent
-// gap. Runs before the transport is up, so the operator sees it on stderr.
+// Reject unsupported schema keywords before advertising tools to a client.
 for (const tool of TOOLS) assertKnownKeywords(tool.inputSchema, `${tool.name}.inputSchema`);
 
-/**
- * The docs are served by the marketing site, not by the API gateway, so these
- * cannot be derived from DOMSCOUT_BASE_URL — that host has no /llms-full.txt.
- * They get their own override instead, so someone pointed at a staging
- * deployment reads that deployment's contract rather than production's.
- */
+// Documentation has its own host; the API gateway serves no contract resources.
 const DOCS_BASE_URL = (process.env.DOMSCOUT_DOCS_BASE_URL || 'https://www.domscout.io').replace(/\/+$/, '');
 const DOCS_URL = `${DOCS_BASE_URL}/llms-full.txt`;
-/**
- * Read from package.json rather than restated here.
- * This was the literal '1.0.0' while package.json said 1.0.2, so every MCP
- * client was told a version the package had not been for two releases — and a
- * handshake version is exactly what a client uses to reason about capability.
- */
+/** The handshake must report the version of the installed package. */
 const MCP_SERVER_VERSION = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 ).version;
@@ -84,19 +49,7 @@ const RESOURCES = [
 ];
 
 function main() {
-  /*
-    A CONFIGURATION FAILURE IS DEFERRED TO THE FIRST TOOL CALL, NOT FATAL HERE.
-    Exiting made the server unable to complete `initialize`, so nothing could
-    reach tools/list: a directory listing the server enumerated no tools, and a
-    client previewing what it offers before a key is pasted saw a process that
-    died. None of that needs a credential — only CALLING a tool does.
-
-    The error is kept and thrown from the call handler, which already turns it
-    into an `isError` result, so the reason reaches the person in their client
-    instead of a stderr line most of them never see. The trade is that a
-    malformed DOMSCOUT_BASE_URL now surfaces on first use rather than at
-    startup; it is the same message, somewhere it is read.
-  */
+  // Listing tools needs no credential; configuration errors belong on tool calls.
   let client = null;
   let clientError = null;
   try {
@@ -114,26 +67,7 @@ function main() {
   );
 
 
-  // ── FAILURES THAT ARRIVE OUTSIDE A REQUEST ────────────────────────────────
-  //
-  // Everything above is per-request and already returns `isError` rather than
-  // throwing. These two cover what happens BESIDE a request:
-  //
-  //   `server.onerror` is the SDK's transport-level channel — a malformed frame,
-  //   a protocol violation. Unset, the SDK's default writes nothing, so the one
-  //   failure class a user cannot see in a tool result was also the one nothing
-  //   recorded.
-  //
-  //   `unhandledRejection` is the process-level one, and it MATTERS HERE more
-  //   than in most programs: Node terminates on an unhandled rejection, and
-  //   terminating a stdio server does not surface an error to the client — the
-  //   pipe simply closes, and the session ends looking like the user's editor
-  //   disconnected it. A stray rejection anywhere in the SDK or in a tool's
-  //   cleanup path could end a working session with no explanation.
-  //
-  // STDERR, never stdout. stdout is the JSON-RPC channel and one stray byte on
-  // it corrupts the session, which is the same reason the startup failure above
-  // writes to stderr.
+  // stdout carries JSON-RPC, so transport and process diagnostics go to stderr.
   server.onerror = (error) => {
     process.stderr.write(`[domscout mcp] transport error: ${error?.stack || error?.message || error}\n`);
   };
@@ -175,13 +109,7 @@ function main() {
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const resource = RESOURCES.find((candidate) => candidate.uri === request.params.uri);
-    // McpError with InvalidParams (-32602), not a bare Error.
-    //
-    // A bare throw reaches the client as -32603 Internal error, which tells a
-    // caller the SERVER broke. It did not: the client asked for a URI that
-    // does not exist, which is the textbook definition of an invalid
-    // parameter. The distinction is the one a client uses to decide between
-    // retrying and correcting, so reporting it wrong invites the retry.
+    // Unknown resources are invalid parameters, so clients can correct the URI.
     if (!resource) {
       throw new McpError(ErrorCode.InvalidParams, `Unknown resource: ${request.params.uri}`);
     }
@@ -192,10 +120,7 @@ function main() {
       throw new Error(`Could not fetch ${resource.fetchFrom}: ${networkError.message}`);
     }
     if (!response.ok) throw new Error(`Could not fetch ${resource.fetchFrom}: HTTP ${response.status}`);
-    // Read inside a try for the same reason the API client does: the 15s
-    // AbortSignal covers body reading, so a reset or trickled body throws here
-    // and not from the fetch above. Uncaught, it surfaced as a bare
-    // "terminated"/"aborted" with no indication of WHICH resource failed.
+    // The fetch deadline also covers reading the response body.
     let text;
     try {
       text = await response.text();
@@ -225,17 +150,7 @@ function main() {
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
 
-  // STDIN CLOSING IS HOW AN MCP HOST DISCONNECTS, and it is not a signal.
-  //
-  // The SDK's StdioServerTransport subscribes to 'data' and 'error' on stdin
-  // and to nothing else, so when the host goes away and the pipe closes, the
-  // transport does not notice and this process keeps running. SIGINT/SIGTERM
-  // above only cover a host that bothers to send one — on Windows a parent that
-  // simply closes the pipe sends neither, which is one orphaned node process
-  // per disconnect, holding its API key in memory.
-  //
-  // 'close' and 'end' both, because which one arrives depends on whether the
-  // stream was ever read from.
+  // The SDK does not detect stdin closure; hosts may disconnect without a signal.
   process.stdin.on('close', cleanup);
   process.stdin.on('end', cleanup);
 }

@@ -1,16 +1,5 @@
-/**
- * Tool arguments are checked against the schema the tool declares.
- *
- * Until validate.js existed, every `inputSchema` in tools.js was documentation
- * the model read and nothing enforced: `CallToolRequestSchema` checked the
- * JSON-RPC envelope and handed `params.arguments` straight to `tool.run`. A
- * model that emitted a negative delay or an invented enum member got a network
- * round trip and a 400 — and, for anything the API happened to accept, a
- * capture it had paid a credit for.
- *
- * The protocol-level cases below are the ones that matter, because the defect
- * was never in the schemas; it was that nothing CALLED them. A unit test of the
- * validator alone would have passed on the broken build.
+/** Verify that invalid tool arguments are refused through the MCP protocol
+ * before any request reaches the API.
  */
 
 import test from 'node:test';
@@ -102,9 +91,7 @@ test('a missing required argument is refused rather than sent as undefined', asy
   });
 });
 
-test('a valid call is not disturbed by the new check', async () => {
-  // The failure mode that would matter most: a validator strict enough to
-  // refuse calls that were always fine.
+test('a valid call reaches the API', async () => {
   await withRefusingApi(async (client, apiCalls) => {
     const result = await client.callTool({
       name: 'domscout_extract_markdown',
@@ -117,10 +104,7 @@ test('a valid call is not disturbed by the new check', async () => {
 });
 
 test('every declared schema is one the validator can actually enforce', () => {
-  // The startup assertion index.js runs, exercised here so the failure lands on
-  // a developer rather than on someone's MCP client. A keyword nothing
-  // implements is a constraint promised in the tool listing and kept by nobody,
-  // which is the exact shape of the defect this file exists to close.
+  // Unsupported constraints must fail before tools are advertised.
   for (const tool of TOOLS) {
     assert.doesNotThrow(() => assertKnownKeywords(tool.inputSchema, `${tool.name}.inputSchema`));
   }
@@ -146,13 +130,7 @@ test('the field map is bounded by the same rules the API applies', () => {
 });
 
 test('a prototype property name cannot smuggle an unknown argument past the schema', () => {
-  // `schema.properties?.[key]` resolves INHERITED members: `properties.toString`
-  // is Object.prototype.toString for any schema that does not declare it. That
-  // made `child` truthy, so the key took the "known property" branch, and
-  // `validate` returned at its `typeof schema !== 'object'` guard because a
-  // function is not an object — skipping the additionalProperties check
-  // entirely. Any argument named after an Object.prototype member was accepted
-  // by a schema that accepts nothing else, and forwarded to the API.
+  // Inherited members must not bypass additionalProperties or value checks.
   const schema = {
     type: 'object',
     additionalProperties: false,
@@ -174,9 +152,7 @@ test('a prototype property name cannot smuggle an unknown argument past the sche
 });
 
 test('the API key is never sent over an unencrypted connection', async () => {
-  // DOMSCOUT_API_KEY rides in a header on every request, so DOMSCOUT_BASE_URL's
-  // scheme decides whether a live customer credential goes out in clear text.
-  // Nothing checked it, and the failure has no symptom: the requests succeed.
+  // Remote API keys require HTTPS; local development may use loopback HTTP.
   const { createClient } = await import('../src/client.js');
   const opts = (baseUrl) => ({ apiKey: 'ds_test', baseUrl, fetchImpl: async () => new Response('{}') });
 

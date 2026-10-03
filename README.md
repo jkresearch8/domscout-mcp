@@ -68,6 +68,12 @@ paste the key into prompts.
 A request never costs more than 10 credits. Tool results include the request
 cost and remaining balance.
 
+Completed screenshot, grid, skeleton and timeline jobs return images as MCP
+image blocks. PDF results use
+the same inline size limit for synchronous captures and completed jobs; larger
+PDFs return metadata and retrieval guidance. Job status and identifiers remain
+available alongside the capture result.
+
 ## Resources
 
 | URI | Contents |
@@ -87,10 +93,6 @@ the MCP client environment block; do not commit it or paste it into prompts.
 - [Documentation](https://www.domscout.io/docs/mcp)
 - [API reference](https://www.domscout.io/docs)
 - [Issues](https://github.com/jkresearch8/domscout-mcp/issues)
-
-This repository mirrors the published package. Releases are cut from a
-separate development repository, so please open an issue rather than a pull
-request.
 
 ## License
 

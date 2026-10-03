@@ -1,35 +1,5 @@
-/**
- * Boot the MCP server as a real child process and drive it with a real MCP
- * client over stdio.
- *
- * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
- *
- * `npm run check` is `node --check src/*.js`, which is a PARSE: it does not
- * resolve a single import. `@modelcontextprotocol/sdk/server/index.js` could
- * be dropped from the dependency tree, renamed by a major release, or moved to
- * a different export path, and a parse check would still pass. The first
- * person to find out would be a user, at `npx -y @domscout/mcp`, with a client
- * hanging on a handshake that is never going to arrive.
- *
- * That is not a hypothetical class of failure. The SDK is a caret range, and
- * `npx -y` re-resolves it on every cold run — so a published user gets whatever
- * 1.x is latest that day, never the exact version in package-lock.json. The
- * lockfile protects CI and protects nobody downstream. This suite is what turns
- * an SDK change from a user-visible outage into a red build.
- *
- * So this suite spawns src/index.js exactly as an MCP client would,
- * completes a real `initialize`,
- * and exercises every request handler the server registers, against a stub API
- * on loopback. It fails if an import path breaks, if the SDK changes shape, if
- * a tool schema is malformed enough for the protocol to reject it, or if
- * anything ever writes a stray byte to stdout.
- *
- * ── WHY THE STUB IS LOOPBACK HTTP AND NOT A FETCH DOUBLE ────────────────────
- *
- * The point is to test the assembled server, not the client module, which a
- * fetch double already covers in isolation. Handing the child process a real
- * base URL is the only way to cover the wiring BETWEEN createClient, the tool
- * runners, and the transport.
+/** Exercise SDK imports, handshake and handlers through an assembled stdio server.
+ * A loopback API verifies routing without contacting the production service.
  */
 
 import { test } from 'node:test';
@@ -70,8 +40,7 @@ const PNG_1PX = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8B
 /**
  * A stub domscout API on 127.0.0.1.
  *
- * `handler` receives (req, res) and owns the response. Loopback only, so this
- * stays inside the same no-egress boundary the root hermetic suite draws.
+ * Loopback keeps protocol tests isolated from the production service.
  */
 async function startStubApi(handler) {
   const server = http.createServer((req, res) => {
@@ -158,17 +127,7 @@ function defaultApi(req, res) {
 
 test('the server completes a real MCP initialize handshake', async () => {
   await withServer(defaultApi, async (client) => {
-    // Reaching here at all means the SDK imports resolved, the transport came
-    // up, and a protocol version was negotiated. That is the whole gap this
-    // file exists to close.
-    // DERIVED, NOT RESTATED — the same rule src/index.js already follows.
-    //
-    // This asserted the literal '1.0.0'. src/index.js was fixed to read the
-    // version from package.json precisely because a hardcoded one had told
-    // clients the wrong version for two releases; the assertion here kept its
-    // literal, so the moment package.json went to 1.0.2 this test failed and
-    // stayed failing on main for three commits. A version bump is not a
-    // behaviour change and must not need a test edit.
+    // Derive the expected version so releases need no separate test edit.
     assert.deepEqual(client.getServerVersion(), { name: 'domscout', version: PACKAGE_VERSION });
 
     const capabilities = client.getServerCapabilities();
@@ -280,10 +239,7 @@ test('an API refusal reaches the model as a tool error carrying the retry verdic
 });
 
 test('a 429 with no budget headers is retriable rather than read as an empty balance', async () => {
-  // The API Gateway throttle shape: the Lambda never ran, so no x-domscout-*
-  // header exists. `Number(null)` is 0, and read naively that looked like a
-  // balance of exactly zero — telling the model not to bother in the one case
-  // where waiting a second is exactly right.
+  // Gateway throttles omit budget headers; absent values do not mean zero.
   await withServer((req, res) => {
     res.writeHead(429, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ message: 'Too Many Requests' }));
@@ -317,17 +273,9 @@ test('an unknown resource is rejected as a protocol error', async () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// The reading tool talks to POST /scrape
-// ─────────────────────────────────────────────────────────────────────────────
+// The reading tool talks to POST /scrape.
 
-/**
- * The stub for the content endpoint, plus a record of what reached it.
- *
- * The recording is the point. Asserting on the RESULT would pass even if the
- * tool called /screenshot and the stub happened to answer identically — and
- * "which route did it actually hit" is exactly what changed here.
- */
+/** Record the route and body independently of the response returned by the stub. */
 function scrapeApi(seen) {
   return (req, res, body) => {
     const parsed = body ? JSON.parse(body) : null;
@@ -456,9 +404,7 @@ test('an empty document still returns a usable answer rather than an empty block
 });
 
 test('booting without an API key still serves tools/list, and fails on the call', async () => {
-  // A directory, and any client previewing the server before a key is pasted,
-  // reads tools/list from a process that has no credential. Exiting here made
-  // that impossible and published a server that appeared to offer nothing.
+  // Clients can discover tools before an API key is configured.
   const env = { ...process.env };
   delete env.DOMSCOUT_API_KEY;
 
