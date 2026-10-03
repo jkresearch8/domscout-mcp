@@ -42,8 +42,7 @@ export function assertKnownKeywords(schema, path = 'inputSchema') {
   for (const keyword of Object.keys(schema)) {
     if (!ENFORCED.has(keyword) && !ANNOTATIONS.has(keyword)) {
       throw new Error(
-        `${path}.${keyword} is not a keyword mcp/src/validate.js implements, so declaring it would `
-        + 'promise a constraint nothing enforces. Implement it in validate.js or remove it.',
+        `${path}.${keyword} is not a keyword the tool argument validator supports.`,
       );
     }
   }
